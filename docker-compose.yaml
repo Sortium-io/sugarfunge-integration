@@ -1,20 +1,88 @@
 version: '3.6'
+
 services:
-  swagger:
-    image: swaggerapi/swagger-ui
+
+  # TODO: REMOVE THIS , FOR TESTING PURPOSE ONLY
+  dozzle:
+    container_name: dozzle
+    image: amir20/dozzle:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
-      - 7000:8080
-    restart: always
-    volumes:
-      - './swagger.json:/swagger.json'
-    environment:
-      SWAGGER_JSON: ${SWAGGER_JSON}
-  metrics:
-    image: 'prom/prometheus:latest'
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: always
-    ports: 
-        - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - 9999:8080
+  # Bridge Main Chain
+  main-chain:
+    image: "chainsafe/chainbridge-geth:20200505131100-5586a65"
+    container_name: main-chain
+    network_mode: host
+    ports:
+      - "8545:8545"
+      - "30303:30303"
+  # Bridge Main Chain Deployments via CLI
+  chainbridge-deploy:
+    image: chainbridge-deploy
+    build:
+      context: .
+      dockerfile: chainbridge-deploy.Dockerfile
+    restart: on-failure
+    command: "--url http://172.17.0.1:8545 deploy --all --relayerThreshold 1"
+    links:
+      - main-chain
+  # Bridge Main Chain Deployments via Truffle
+  sf-deploy:
+    image: sf-contracts-deployment
+    build:
+      context: .
+      dockerfile: sugarfunge-deploy.Dockerfile
+    env_file:
+      - ./.env
+    depends_on:
+      - main-chain
+      - chainbridge-deploy
+    links:
+      - main-chain
+    command: "docker_deploy"
+
+  # Substrate Chain 
+  sub-chain:
+    image: "chainsafe/chainbridge-substrate-chain:v1.3.0"
+    container_name: sub-chain
+    command: chainbridge-substrate-chain --dev --alice --ws-external --rpc-external
+    ports:
+      - "9944:9944"
+
+  chainbridge-register:
+    image: chainbridge-register
+    build:
+      context: .
+      dockerfile: chainbridge-deploy.Dockerfile
+    restart: on-failure
+    depends_on:
+      - chainbridge-deploy
+    links:
+      - main-chain
+    command: "--url http://172.17.0.1:8545 bridge register-resource --resourceId '0x000000000000000000000000000000c76ebe4a02bbc34786d860b355f5a5ce00' --targetContract '0x21605f71845f372A9ed84253d2D024B7B10999f4' --handler '0x3167776db165D8eA0f51790CA2bbf44Db5105ADF'"
+
+  chainbridge-set-burn:
+    image: chainbridge-set-burn
+    build:
+      context: .
+      dockerfile: chainbridge-deploy.Dockerfile
+    restart: on-failure
+    depends_on:
+      - chainbridge-deploy
+    links:
+      - main-chain
+    command: "--url http://172.17.0.1:8545 bridge set-burn --tokenContract '0x21605f71845f372A9ed84253d2D024B7B10999f4' --handler '0x3167776db165D8eA0f51790CA2bbf44Db5105ADF'"
+
+  chainbridge-add-minter:
+    image: chainbridge-add-minter
+    build:
+      context: .
+      dockerfile: chainbridge-deploy.Dockerfile
+    restart: on-failure
+    depends_on:
+      - chainbridge-deploy
+    links:
+      - main-chain
+    command: "--url http://172.17.0.1:8545 erc20 add-minter --minter '0x3167776db165D8eA0f51790CA2bbf44Db5105ADF'"
